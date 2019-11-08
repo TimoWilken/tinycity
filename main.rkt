@@ -4,61 +4,46 @@
 (require racket/gui)
 (require racket/draw)
 
-(define *tile-size* 32)
+(define *tile-size* 128)
 
-(define (color-tile color)
-  (let* ([bitmap (make-bitmap *tile-size* *tile-size*)]
-         [dc (new bitmap-dc% [bitmap bitmap])])
-    (send dc set-smoothing 'aligned)
-    (send dc set-pen "black" 0 'transparent)
-    (send dc set-brush color 'solid)
-    (send dc draw-rectangle 0 0 *tile-size* *tile-size*)
-    (values bitmap dc)))
+(define (draw-base-tile dc type x y)
+  (send dc set-pen "black" 0 'transparent)
+  (send dc set-brush (match type
+                       ['grass "green"]
+                       ['concrete "gray"]
+                       ['water "darkblue"]) 'solid)
+  (send dc draw-rectangle x y 1 1))
 
-(define (make-monocolor-rect color)
-  (let-values ([(bitmap _) (color-tile color)])
-    bitmap))
+(define (tile-anchor-coords anchor x y)
+  (match anchor
+    ['north (values (+ x 1/2) y)]
+    ['east (values (+ x 1) (+ y 1/2))]
+    ['south (values (+ x 1/2) (+ y 1))]
+    ['west (values x (+ y 1/2))]
+    ['center (values (+ x 1/2) (+ y 1/2))]))
 
-(define grass (make-monocolor-rect "green"))
-(define concrete (make-monocolor-rect "gray"))
-(define water (make-monocolor-rect "darkblue"))
-(define road-ns
-  (let-values ([(bitmap dc) (color-tile "green")])
-    (send dc set-brush "black" 'solid)
-    (send dc draw-rectangle (/ *tile-size* 4) 0 (/ *tile-size* 2) *tile-size*)
-    (send dc set-pen "white" (/ *tile-size* 16) 'short-dash)
-    (send dc draw-line (/ *tile-size* 2) 0 (/ *tile-size* 2) *tile-size*)
-    bitmap))
+(define (move-coords direction from-x from-y distance)
+  (match direction
+    ['north (values from-x (- from-y distance))]
+    ['east (values (+ from-x distance) from-y)]
+    ['south (values from-x (+ from-y distance))]
+    ['west (values (- from-x distance) from-y)]))
 
-(define (draw-tile dc type x y)
-  (send dc draw-bitmap
-        (match type
-          ['road road-ns]
-          ['grass grass]
-          ['concrete concrete]
-          ['water water])
-        (* x *tile-size*)
-        (* y *tile-size*)))
-
-(define (draw-road dc direction from-x from-y len)
-  (define (step-coords step)
-    (let-values ([(tile-x tile-y offset)
-                  (apply values (map ((curry *) *tile-size*)
-                                     (list from-x from-y step)))])
-      (match direction
-        ['north (list tile-x (- tile-y offset))]
-        ['east (list (+ tile-x offset) tile-y)]
-        ['south (list tile-x (+ tile-y offset))]
-        ['west (list (- tile-x offset) tile-y)])))
-
-  (for/list ([coords (map step-coords (range len))])
-    (send dc draw-bitmap road-ns . coords)))
+(define (draw-road dc direction from-tile-x from-tile-y for-tiles)
+  (let*-values ([(from-point-x from-point-y) (tile-anchor-coords direction from-tile-x from-tile-y)]
+                [(to-point-x to-point-y) (move-coords direction from-point-x from-point-y for-tiles)])
+    (send dc set-pen "black" 1/2 'solid)
+    (send dc draw-line from-point-x from-point-y to-point-x to-point-y)
+    (send dc set-pen "white" 1/16 'solid)
+    (send dc draw-line from-point-x from-point-y to-point-x to-point-y)))
 
 (define (main-canvas-paint canvas dc)
-  (draw-tile dc 'grass 0 0)
-  (draw-tile dc 'grass 0 1)
-  (draw-tile dc 'grass 1 0)
-  (draw-road dc 'south 1 1 5)
+  (send dc set-scale *tile-size* *tile-size*)
+  (send dc set-smoothing 'aligned)
+  (draw-base-tile dc 'grass 0 0)
+  (draw-base-tile dc 'grass 0 1)
+  (draw-base-tile dc 'grass 1 0)
+  (draw-road dc 'south 1 1 3)
   (draw-road dc 'east 2 1 5))
 
 (define (main)
