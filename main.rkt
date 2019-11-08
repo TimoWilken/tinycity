@@ -5,9 +5,10 @@
 (require racket/draw)
 
 (define *tile-size* 128)
+(define *show-tile-grid* #t)
 
 (define (draw-base-tile dc type x y)
-  (send dc set-pen "black" 0 'transparent)
+  (send dc set-pen "brown" 1/64 (if *show-tile-grid* 'solid 'transparent))
   (send dc set-brush (match type
                        ['grass "green"]
                        ['concrete "gray"]
@@ -40,16 +41,15 @@
 (define (main-canvas-paint canvas dc)
   (send dc set-scale *tile-size* *tile-size*)
   (send dc set-smoothing 'aligned)
-  (draw-base-tile dc 'grass 0 0)
-  (draw-base-tile dc 'grass 0 1)
-  (draw-base-tile dc 'grass 1 0)
+  (for*/list ([x (range 6)] [y (range 6)])
+    (draw-base-tile dc 'grass x y))
+  (for*/list ([x (range 3 6)] [y (range 3 5)])
+    (draw-base-tile dc 'concrete x y))
+  (for*/list ([x (range 6)] [y (range 6 10)])
+    (draw-base-tile dc 'water x y))
   (draw-road dc 'south 1 1 3)
   (draw-road dc 'east 2 1 5))
 
-(define (main)
-  (define frame
-    (new frame% [label "Example"] [width 300] [height 300]))
+(let ([frame (new frame% [label "TinyCity"] [width 640] [height 480])])
   (new canvas% [parent frame] [paint-callback main-canvas-paint])
   (send frame show #t))
-
-(main)
