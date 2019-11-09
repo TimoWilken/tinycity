@@ -20,43 +20,43 @@
   (let ([x (subtile-pos-x pos)]
         [y (subtile-pos-y pos)])
     (match (subtile-pos-anchor pos)
-      ['north (tile-pos (+ x 1/2) y)]
-      ['east (tile-pos (+ x 1) (+ y 1/2))]
-      ['south (tile-pos (+ x 1/2) (+ y 1))]
-      ['west (tile-pos x (+ y 1/2))]
-      ['center (tile-pos (+ x 1/2) (+ y 1/2))])))
+      ['north (values (+ x 1/2) y)]
+      ['east (values (+ x 1) (+ y 1/2))]
+      ['south (values (+ x 1/2) (+ y 1))]
+      ['west (values x (+ y 1/2))]
+      ['center (values (+ x 1/2) (+ y 1/2))])))
 
 (define (move-coords pos direction distance)
   (let ([x (tile-pos-x pos)]
         [y (tile-pos-y pos)])
     (match direction
-      ['north (tile-pos x (- y distance))]
-      ['east (tile-pos (+ x distance) y)]
-      ['south (tile-pos x (+ y distance))]
-      ['west (tile-pos (- x distance) y)])))
+      ['north (values x (- y distance))]
+      ['east (values (+ x distance) y)]
+      ['south (values x (+ y distance))]
+      ['west (values (- x distance) y)])))
 
-(define (draw-real-point dc center color radius)
+(define (draw-real-point dc x y color radius)
   (send dc set-pen "black" 0 'transparent)
   (send dc set-brush color 'solid)
-  (let ([top-left-x (- (tile-pos-x center) radius)]
-        [top-left-y (- (tile-pos-y center) radius)]
+  (let ([top-left-x (- x radius)]
+        [top-left-y (- y radius)]
         [diameter (* 2 radius)])
     (send dc draw-ellipse top-left-x top-left-y diameter diameter)))
 
 (define/match (draw-road-tile dc tile connect-directions)
+  [(_ _ (list)) (void)]
   [(dc (tile-pos x y) connect-directions)
    (define (draw-center-point)
-     (let ([center-pos (tile-anchor-coords (subtile-pos x y 'center))])
-       (draw-real-point dc center-pos "black" 1/4)
-       (draw-real-point dc center-pos "white" 1/32)))
+     (let-values ([(x y) (tile-anchor-coords (subtile-pos x y 'center))])
+       (draw-real-point dc x y "black" 1/4)
+       (draw-real-point dc x y "white" 1/32)))
 
    (match connect-directions
-     [(list) (void)]
      [(list-no-order 'center other-dir)
       (begin (draw-center-point)
              (send dc set-pen (send the-pen-list find-or-create-pen "black" 1/2 'solid 'butt))
-             (match-let ([(tile-pos x1 y1) (tile-anchor-coords (subtile-pos x y 'center))]
-                         [(tile-pos x2 y2) (tile-anchor-coords (subtile-pos x y other-dir))])
+             (let-values ([(x1 y1) (tile-anchor-coords (subtile-pos x y 'center))]
+                         [(x2 y2) (tile-anchor-coords (subtile-pos x y other-dir))])
                (send dc draw-line x1 y1 x2 y2)
                (send dc set-pen (send the-pen-list find-or-create-pen "white" 1/16 'solid 'butt))
                (send dc draw-line x1 y1 x2 y2)))]
@@ -69,8 +69,8 @@
       (begin empty)])])
 
 (define (draw-road dc direction from-tile-x from-tile-y for-tiles)
-  (match-let* ([(tile-pos from-point-x from-point-y) (tile-anchor-coords (subtile-pos from-tile-x from-tile-y direction))]
-               [(tile-pos to-point-x to-point-y) (move-coords (tile-pos from-point-x from-point-y) direction for-tiles)])
+  (let*-values ([(from-point-x from-point-y) (tile-anchor-coords (subtile-pos from-tile-x from-tile-y direction))]
+                [(to-point-x to-point-y) (move-coords (tile-pos from-point-x from-point-y) direction for-tiles)])
     (send dc set-pen "black" 1/2 'solid)
     (send dc draw-line from-point-x from-point-y to-point-x to-point-y)
     (send dc set-pen "white" 1/16 'solid)
