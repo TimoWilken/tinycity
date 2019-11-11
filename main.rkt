@@ -3,8 +3,10 @@
 (require racket/gui)
 (require racket/draw)
 
-(define *tile-size* 64)
-(define *show-tile-grid* #t)
+(define *tile-size* 32)
+(define *world-size* 100)
+(define *show-tile-grid* #f)
+(define *scroll-step* 1/32)
 (define *terrain-colors*
   #hash((grass . "green") (concrete . "gray") (water . "darkblue")))
 (define *asphalt-pen*
@@ -12,10 +14,18 @@
 (define *road-markings-pen*
   (send the-pen-list find-or-create-pen "white" 1/16 'solid 'butt))
 
-(define (draw-base-tile dc x y type)
-  (send dc set-pen "brown" 1/64 (if *show-tile-grid* 'solid 'transparent))
-  (send dc set-brush (hash-ref *terrain-colors* type) 'solid)
-  (send dc draw-rectangle x y 1 1))
+(define (member? item lst (cmp eq?))
+  (ormap (curry cmp item) lst))
+
+(define (pixels->tiles x y)
+  (values (quotient x *tile-size*)
+          (quotient y *tile-size*)))
+
+(define/match (dir-negate dir)
+  [('north) 'south]
+  [('south) 'north]
+  [('east) 'west]
+  [('west) 'east])
 
 (define/match (tile-anchor-coords x y anchor)
   [(_ _ 'north ) (values (+ x 1/2)    y     )]
@@ -24,12 +34,15 @@
   [(_ _ 'west  ) (values    x      (+ y 1/2))]
   [(_ _ 'center) (values (+ x 1/2) (+ y 1/2))])
 
-(define/match (move-coords x y direction distance)
-  [(_ _ 'north _) (values x (- y distance))]
-  [(_ _ 'east  _) (values (+ x distance) y)]
-  [(_ _ 'south _) (values x (+ y distance))]
-  [(_ _ 'west  _) (values (- x distance) y)])
+(define (draw-base-tile dc x y type)
+  (send dc set-pen "brown" 1/64 (if *show-tile-grid* 'solid 'transparent))
+  (send dc set-brush (hash-ref *terrain-colors* type) 'solid)
+  (send dc draw-rectangle x y 1 1))
 
+;; (send dc draw-point ...) doesn't draw a point/circle, but a short line.
+;; Because we've scaled the DC by a large number, this line is very visible.
+;; Hence, we need to draw the "point" using an ellipse. The disadvantage is that
+;; we can't use the current pen!
 (define (draw-real-point dc x y color radius)
   (send dc set-pen "black" 0 'transparent)
   (send dc set-brush color 'solid)
@@ -41,6 +54,10 @@
 (define (draw-road-tile dc x y connect-directions)
   (match connect-directions
     ['() (void)]
+    [(list-no-order 'center)
+     (let-values ([(ctr-x ctr-y) (tile-anchor-coords x y 'center)])
+       (draw-real-point dc ctr-x ctr-y "black" 1/4)
+       (draw-real-point dc ctr-x ctr-y "white" 1/32))]
     [(list-no-order 'center other-dirs ...)
      (draw-road-tile dc x y other-dirs)]
     [(list-no-order dir other-dirs ...)
@@ -54,25 +71,41 @@
        (send dc set-pen *road-markings-pen*)
        (send dc draw-line ctr-x ctr-y edge-x edge-y))]))
 
-(define (draw-world dc world)
-  (for ([(pos tile) (in-hash world)])
-    (match-let ([(list x y) pos]
-                [(list base cover-info ...) tile])
-      (draw-base-tile dc x y base)
-      (draw-tile-cover dc x y cover-info))))
+(define (draw-tile dc x y tile-info)
+  (match-let ([(list base cover-info ...) tile-info])
+    (draw-base-tile dc x y base)
+    (let draw-tile-cover ()
+      (match cover-info
+        ['() (void)]
+        [(list 'power other ...)
+         (draw-tile-cover dc x y other)
+         (void)] ;; TODO draw power lines
+        [(list 'zone zone-type)
+         (void)] ;; TODO draw zone
+        [(list 'road connected-dirs ...)
+         (draw-road-tile dc x y connected-dirs)]
+        [(list 'building building-type)
+         (void)])))) ;; TODO draw building
 
-(define (draw-tile-cover dc x y cover-info)
-  (match cover-info
-    ['() (void)]
-    [(list 'power other ...)
-     (draw-tile-cover dc x y other)
-     (void)] ;; TODO draw power lines
-    [(list 'zone zone-type)
-     (void)] ;; TODO draw zone
-    [(list 'road connected-dirs ...)
-     (draw-road-tile dc x y connected-dirs)]
-    [(list 'building building-type)
-     (void)])) ;; TODO draw building
+(define (tile-neighbours x y)
+  `((west ,(sub1 x) ,y) (east ,(add1 x) ,y) (north ,x ,(sub1 y)) (south ,x ,(add1 y))))
+
+(define (place-road! world x y)
+  (create-road! world x y '(center))
+  (connect-road-tile! world x y))
+
+(define (connect-road-tile! world x y)
+  (for ([neighbour (tile-neighbours x y)])
+    (match-let ([(list dir nx ny) neighbour])
+      (when (tile-has-road? world nx ny)
+        (create-road! world nx ny (list (dir-negate dir)))
+        (create-road! world x y (list dir))))))
+
+(define (tile-has-road? world x y)
+  (match (hash-ref world (list x y) #f)
+    [(list _ 'road _ ...) #t]
+    [(list _ 'power 'road _ ...) #t]
+    [_ #f]))
 
 (define (create-road! world x y connect-dirs)
   (unless (can-build-at? world x y 'road)
@@ -81,63 +114,80 @@
    world (list x y)
    (match-lambda
      [(list base 'road connected-dirs ...)
-      `(,base road . ,(set-union connected-dirs connect-dirs))]
+      (list* base 'road (set-union connected-dirs connect-dirs))]
      [(list base _ ...)
       ;; overwrite with or add road -- TODO is this the right thing to do?
-      `(,base road . ,connect-dirs)])))
-
-(define (can-build-on-tile? tile new-type)
-  (match tile
-    ['() #f]
-    [(list base) (not (eq? base 'water))]
-    [(list _ 'road _ ...)
-     (match new-type [(or 'road 'power) #t] [_ #f])]
-    [(list _ 'building _ ...) #f]
-    [(list _ 'zone _) #f]
-    [(list base 'power other ...)
-     (can-build-on-tile? (cons base other) new-type)]))
+      (list* base 'road connect-dirs)])))
 
 (define (can-build-at? world x y type)
-  (can-build-on-tile? (hash-ref world (list x y) '()) type))
+  (let can-build-on-tile? ([tile (hash-ref world (list x y) '())])
+    (match tile
+      [(list) #f]
+      [(list base) (not (eq? base 'water))]
+      [(list _ 'road _ ...) (member? type '(road power))]
+      [(list _ 'building _ ...) #f]
+      [(list _ 'zone _) #f]
+      [(list base 'power other ...) (can-build-on-tile? (cons base other))])))
 
 (define *world*
   (let ([world (make-hash)])
-    (for* ([x (range 10)] [y (range 6)])
+    (for* ([x (range *world-size*)] [y (range 15)])
       (hash-set! world (list x y)
-                 (list (if (and (<= 3 x 6) (<= 3 y 5)) 'concrete 'grass))))
-    (for* ([x (range 10)] [y (range 6 10)])
-      (hash-set! world (list x y) (list 'water)))
+                 (if (and (<= 3 x 6) (<= 3 y 5)) '(concrete) '(grass))))
+    (for* ([x (range *world-size*)] [y (range 15 *world-size*)])
+      (hash-set! world (list x y) '(water)))
     (for ([x (range 5 9)])
-      (create-road! world x 4 '(east west)))
-    (create-road! world 3 3 '(center east))
-    (create-road! world 4 3 '(west south))
-    (create-road! world 4 4 '(north east south))
+      (place-road! world x 4))
+    (place-road! world 3 3)
+    (place-road! world 4 3)
+    (place-road! world 4 4)
+    (place-road! world 7 7)
     world))
+
+(define (draw-cursor-tile dc x y)
+  (define pen-width 1/32)
+  (send dc set-brush "black" 'transparent)
+  (send dc set-pen "red" pen-width 'solid)
+  (send dc draw-rectangle
+        (+ x (/ pen-width 2)) (+ y (/ pen-width 2))
+        (- 1 pen-width) (- 1 pen-width)))
 
 (define (main-canvas-paint canvas dc)
   (send dc set-scale *tile-size* *tile-size*)
-  (send dc set-smoothing 'aligned)
-  (draw-world dc *world*))
+  (send dc set-smoothing 'smoothed)
+  (let*-values ([(left-px top-px) (send canvas get-view-start)]
+                [(width-px height-px) (send canvas get-client-size)]
+                [(left top) (pixels->tiles left-px top-px)]
+                [(right bottom) (pixels->tiles (+ left-px width-px) (+ top-px height-px))])
+    (for ([(pos tile) *world*])
+      (match-let ([(list x y) pos])
+        (when (and (<= left x right) (<= top y bottom))
+          (draw-tile dc x y tile))))))
 
-(define *scroll-step* 1/32)
 (define main-canvas%
   (class canvas%
     (init-field toplevel)
     (when (not (send toplevel has-status-line?))
       (send toplevel create-status-line))
-    (inherit scroll get-client-size get-virtual-size get-view-start)
+    (inherit init-auto-scrollbars scroll get-client-size get-virtual-size
+             get-view-start get-dc suspend-flush resume-flush)
+
+    (define previous-cursor-tile #f)
 
     (define/override (on-event event)
       (let-values ([(origin-x origin-y) (get-view-start)])
         (send event set-x (+ (send event get-x) origin-x))
         (send event set-y (+ (send event get-y) origin-y)))
-      (send toplevel set-status-text
-            (format "(~a, ~a) px; tile (~a, ~a); ~a"
-                    (send event get-x)
-                    (send event get-y)
-                    (quotient (send event get-x) *tile-size*)
-                    (quotient (send event get-y) *tile-size*)
-                    (send event get-event-type))))
+      (send toplevel set-status-text (format "~a" (send event get-event-type)))
+      (suspend-flush)
+      (match previous-cursor-tile
+        [#f (void)]
+        [(list x y) (let ([tile (hash-ref *world* previous-cursor-tile #f)])
+                      (when tile (draw-tile (get-dc) x y tile)))])
+      (let-values ([(tx ty) (pixels->tiles (send event get-x) (send event get-y))])
+        (draw-cursor-tile (get-dc) tx ty)
+        (set! previous-cursor-tile (list tx ty)))
+      (resume-flush))
 
     (define/override (on-char event)
       (let-values ([(scroll-x scroll-y) (get-view-start)]
@@ -152,9 +202,24 @@
             ['wheel-right (scroll (min 1 (+ x *scroll-step*)) #f)]
             [_ (void)]))))
 
-    (super-new [style '(hscroll vscroll)] [paint-callback main-canvas-paint])))
+    (super-new [style '(hscroll vscroll)] [paint-callback main-canvas-paint])
+    (init-auto-scrollbars (* *world-size* *tile-size*) (* *world-size* *tile-size*) 0 0)))
 
-(define frame (new frame% [label "TinyCity"] [width 640] [height 480]))
-(define canvas (new main-canvas% [parent frame] [toplevel frame]))
-(send canvas init-auto-scrollbars (* 50 *tile-size*) (* 50 *tile-size*) 0 0)
-(send frame show #t)
+(define (on-select-tool radio-box event)
+  (send gui:toplevel-frame set-status-text
+        (format "~a" (send radio-box get-selection))))
+
+(define gui:toplevel-frame (new frame% [label "TinyCity"] [width 640] [height 480]))
+(define gui:main-pane (new horizontal-pane% [parent gui:toplevel-frame]))
+(define gui:sidebar-panel
+  (new vertical-panel% [parent gui:main-pane] [style '(auto-vscroll)]
+       [alignment '(center top)] [stretchable-width #f]))
+
+(define gui:tool-selection
+  (new radio-box% [label "Selected tool"] [parent gui:sidebar-panel]
+       [style '(vertical vertical-label)] [callback on-select-tool]
+       [choices '("&Query" "&Bulldoze" "&Road")]))
+
+(define gui:main-canvas
+  (new main-canvas% [parent gui:main-pane] [toplevel gui:toplevel-frame]))
+(send gui:toplevel-frame show #t)
