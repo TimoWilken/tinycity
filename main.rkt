@@ -138,7 +138,8 @@
       (hash-set! world (list x y) '(water)))
     (for ([x (range 5 9)])
       (place-road! world x 4))
-    (for-each (curry apply place-road! world) '((3 3) (4 3) (4 4) (4 5) (7 7)))
+    (let ([xs '(3 4 4 4 7)] [ys '(3 3 4 5 7)])
+      (for-each (curry place-road! world) xs ys))
     world))
 
 (define (draw-cursor-tile dc x y)
