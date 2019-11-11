@@ -119,26 +119,39 @@
   (send dc set-smoothing 'aligned)
   (draw-world dc *world*))
 
+(define *scroll-step* 1/5)
 (define main-canvas%
   (class canvas%
     (init-field toplevel)
     (when (not (send toplevel has-status-line?))
       (send toplevel create-status-line))
+    (inherit scroll get-client-size get-virtual-size get-view-start)
 
     (define/override (on-event event)
-      (send toplevel set-status-text
-            (format "(~a, ~a) px; tile (~a, ~a) ~a"
-                    (send event get-x) (send event get-y)
-                    (quotient (send event get-x) *tile-size*)
-                    (quotient (send event get-y) *tile-size*)
-                    (send event get-event-type))))
+      (let-values ([(origin-x origin-y) (get-view-start)])
+        (let ([x (+ (send event get-x) origin-x)]
+              [y (+ (send event get-y) origin-y)])
+          (send toplevel set-status-text
+                (format "(~a, ~a) px; tile (~a, ~a); ~a" x y
+                        (quotient x *tile-size*) (quotient y *tile-size*)
+                        (send event get-event-type))))))
 
-    (super-new [style '(hscroll vscroll)]
-               ;; This uses a lambda so that main-canvas-paint can be
-               ;; updated while the program is running!
-               [paint-callback (λ args (apply main-canvas-paint args))])))
+    (define/override (on-char event)
+      (let-values ([(scroll-x scroll-y) (get-view-start)]
+                   [(virtual-size-x virtual-size-y) (get-virtual-size)]
+                   [(client-size-x client-size-y) (get-client-size)])
+        (let ([x (/ scroll-x (- virtual-size-x client-size-x))]
+              [y (/ scroll-y (- virtual-size-y client-size-y))])
+          (match (send event get-key-code)
+            ['wheel-up    (scroll #f (max 0 (- y *scroll-step*)))]
+            ['wheel-down  (scroll #f (min 1 (+ y *scroll-step*)))]
+            ['wheel-left  (scroll (max 0 (- x *scroll-step*)) #f)]
+            ['wheel-right (scroll (min 1 (+ x *scroll-step*)) #f)]
+            [_ (void)]))))
 
-(let* ([frame (new frame% [label "TinyCity"] [width 640] [height 480])]
-       [canvas (new main-canvas% [parent frame] [toplevel frame])])
-  (send canvas init-auto-scrollbars (* 25 *tile-size*) (* 25 *tile-size*) 0 0)
-  (send frame show #t))
+    (super-new [style '(hscroll vscroll)] [paint-callback main-canvas-paint])))
+
+(define frame (new frame% [label "TinyCity"] [width 640] [height 480]))
+(define canvas (new main-canvas% [parent frame] [toplevel frame]))
+(send canvas init-auto-scrollbars (* 25 *tile-size*) (* 25 *tile-size*) 0 0)
+(send frame show #t)
