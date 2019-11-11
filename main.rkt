@@ -108,7 +108,7 @@
     (for* ([x (range 10)] [y (range 6 10)])
       (hash-set! world (list x y) (list 'water)))
     (for ([x (range 5 9)])
-      (create-road! world x 2 '(east west)))
+      (create-road! world x 4 '(east west)))
     (create-road! world 3 3 '(center east))
     (create-road! world 4 3 '(west south))
     (create-road! world 4 4 '(north east south))
@@ -119,7 +119,7 @@
   (send dc set-smoothing 'aligned)
   (draw-world dc *world*))
 
-(define *scroll-step* 1/5)
+(define *scroll-step* 1/32)
 (define main-canvas%
   (class canvas%
     (init-field toplevel)
@@ -129,12 +129,15 @@
 
     (define/override (on-event event)
       (let-values ([(origin-x origin-y) (get-view-start)])
-        (let ([x (+ (send event get-x) origin-x)]
-              [y (+ (send event get-y) origin-y)])
-          (send toplevel set-status-text
-                (format "(~a, ~a) px; tile (~a, ~a); ~a" x y
-                        (quotient x *tile-size*) (quotient y *tile-size*)
-                        (send event get-event-type))))))
+        (send event set-x (+ (send event get-x) origin-x))
+        (send event set-y (+ (send event get-y) origin-y)))
+      (send toplevel set-status-text
+            (format "(~a, ~a) px; tile (~a, ~a); ~a"
+                    (send event get-x)
+                    (send event get-y)
+                    (quotient (send event get-x) *tile-size*)
+                    (quotient (send event get-y) *tile-size*)
+                    (send event get-event-type))))
 
     (define/override (on-char event)
       (let-values ([(scroll-x scroll-y) (get-view-start)]
@@ -153,5 +156,5 @@
 
 (define frame (new frame% [label "TinyCity"] [width 640] [height 480]))
 (define canvas (new main-canvas% [parent frame] [toplevel frame]))
-(send canvas init-auto-scrollbars (* 25 *tile-size*) (* 25 *tile-size*) 0 0)
+(send canvas init-auto-scrollbars (* 50 *tile-size*) (* 50 *tile-size*) 0 0)
 (send frame show #t)
