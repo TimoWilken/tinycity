@@ -43,7 +43,6 @@
 (define (tile-has-road? world x y)
   (match (hash-ref world (list x y) #f)
     [(list _ 'road _ ...) #t]
-    [(list _ 'power 'road _ ...) #t]
     [_ #f]))
 
 (define (draw-base-tile dc x y type)
@@ -51,11 +50,11 @@
   (send dc set-brush (hash-ref *terrain-colors* type) 'solid)
   (send dc draw-rectangle x y 1 1))
 
-;; (send dc draw-point ...) doesn't draw a point/circle, but a short line.
-;; Because we've scaled the DC by a large number, this line is very visible.
-;; Hence, we need to draw the "point" using an ellipse. The disadvantage is that
-;; we can't use the current pen!
 (define (draw-real-point dc x y color radius)
+  ;; (send dc draw-point ...) doesn't draw a point/circle, but a short line.
+  ;; Because we've scaled the DC by a large number, this line is very visible.
+  ;; Hence, we need to draw the "point" using an ellipse. The disadvantage is
+  ;; that we can't use the current pen!
   (send dc set-pen "black" 0 'transparent)
   (send dc set-brush color 'solid)
   (let ([top-left-x (- x radius)]
@@ -89,9 +88,6 @@
     (let draw-tile-cover ([cover-info cover-info])
       (match cover-info
         ['() (void)]
-        [(list 'power other ...)
-         (draw-tile-cover other)
-         (void)] ;; TODO draw power lines
         [(list 'zone zone-type)
          (void)] ;; TODO draw zone
         [(list 'road connected-dirs ...)
@@ -114,7 +110,6 @@
   (hash-update! world (list x y)
                 (match-lambda
                   [(list base 'road _ ...) (list base)]
-                  [(list base 'power 'road _ ...) (list base 'power)]
                   [tile tile]))
   (for ([neighbour (tile-neighbours x y)])
     (match-let ([(list dir nx ny) neighbour])
@@ -134,8 +129,6 @@
                 (match-lambda
                   [(list base 'road connected-dirs ...)
                    (list* base 'road (set-union connected-dirs connect-dirs))]
-                  [(list base 'power _ ...)
-                   (list* base 'power 'road connect-dirs)]
                   [(list base _ ...)
                    ;; overwrite with or add road -- TODO is this the right thing to do?
                    (list* base 'road connect-dirs)])))
@@ -145,10 +138,9 @@
     (match tile
       [(list) #f]
       [(list base) (not (eq? base 'water))]
-      [(list _ 'road _ ...) (member? type '(road power))]
+      [(list _ 'road _ ...) (eq? type 'road)]
       [(list _ 'building _ ...) #f]
-      [(list _ 'zone _) #f]
-      [(list base 'power other ...) (can-build-on-tile? (cons base other))])))
+      [(list _ 'zone _) #f])))
 
 (define *world*
   (let ([world (make-hash)])
@@ -218,11 +210,11 @@
 
       (when (send event button-up? 'left)
         (match (get-selected-tool)
-          ['build-road
+          ['(build road)
            (when (with-handlers ([exn:fail:contract? (λ (e) #f)])
                    (place-road! *world* tx ty) #t)
              (draw-tile-with-neighbours (get-dc) *world* tx ty))]
-          ['bulldoze
+          ['(bulldoze)
            (remove-road! *world* tx ty)
            (draw-tile-with-neighbours (get-dc) *world* tx ty)]
           [_ (void)]))
@@ -253,9 +245,9 @@
 
 (define (get-selected-tool)
   (match (send gui:tool-selection get-selection)
-    [0 'query]
-    [1 'bulldoze]
-    [2 'build-road]))
+    [0 '(query)]
+    [1 '(bulldoze)]
+    [2 '(build road)]))
 
 (define gui:toplevel-frame (new frame% [label "TinyCity"] [width 640] [height 480]))
 (define gui:main-pane (new horizontal-pane% [parent gui:toplevel-frame]))
