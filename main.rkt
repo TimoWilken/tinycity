@@ -74,11 +74,11 @@
 (define (draw-tile dc x y tile-info)
   (match-let ([(list base cover-info ...) tile-info])
     (draw-base-tile dc x y base)
-    (let draw-tile-cover ()
+    (let draw-tile-cover ([cover-info cover-info])
       (match cover-info
         ['() (void)]
         [(list 'power other ...)
-         (draw-tile-cover dc x y other)
+         (draw-tile-cover other)
          (void)] ;; TODO draw power lines
         [(list 'zone zone-type)
          (void)] ;; TODO draw zone
@@ -90,6 +90,12 @@
 (define (tile-neighbours x y)
   `((west ,(sub1 x) ,y) (east ,(add1 x) ,y) (north ,x ,(sub1 y)) (south ,x ,(add1 y))))
 
+(define (tile-has-road? world x y)
+  (match (hash-ref world (list x y) #f)
+    [(list _ 'road _ ...) #t]
+    [(list _ 'power 'road _ ...) #t]
+    [_ #f]))
+
 (define (place-road! world x y)
   (create-road! world x y '(center))
   (connect-road-tile! world x y))
@@ -97,19 +103,14 @@
 (define (connect-road-tile! world x y)
   (for ([neighbour (tile-neighbours x y)])
     (match-let ([(list dir nx ny) neighbour])
+      ; assume that if a road exists here, we can create more
       (when (tile-has-road? world nx ny)
         (create-road! world nx ny (list (dir-negate dir)))
         (create-road! world x y (list dir))))))
 
-(define (tile-has-road? world x y)
-  (match (hash-ref world (list x y) #f)
-    [(list _ 'road _ ...) #t]
-    [(list _ 'power 'road _ ...) #t]
-    [_ #f]))
-
 (define (create-road! world x y connect-dirs)
   (unless (can-build-at? world x y 'road)
-    (error 'create-road! "can't build road here"))
+    (raise-arguments-error 'create-road! "can't build road here" "x" x "y" y))
   (hash-update!
    world (list x y)
    (match-lambda
@@ -164,6 +165,10 @@
         (when (and (<= left x right) (<= top y bottom))
           (draw-tile dc x y tile))))))
 
+(define (draw-world-tile dc world x y)
+  (let ([tile (hash-ref *world* (list x y) #f)])
+    (when tile (draw-tile dc x y tile))))
+
 (define main-canvas%
   (class canvas%
     (init-field toplevel)
@@ -182,9 +187,17 @@
       (suspend-flush)
       (match previous-cursor-tile
         [#f (void)]
-        [(list x y) (let ([tile (hash-ref *world* previous-cursor-tile #f)])
-                      (when tile (draw-tile (get-dc) x y tile)))])
+        [(list x y) (draw-world-tile (get-dc) *world* x y)])
+
       (let-values ([(tx ty) (pixels->tiles (send event get-x) (send event get-y))])
+        (when (send event button-up? 'left)
+          (when (with-handlers ([exn:fail:contract? (λ (e) #f)])
+                  (place-road! *world* tx ty) #t)
+            (draw-world-tile (get-dc) *world* tx ty)
+            (for ([tile (tile-neighbours tx ty)])
+              (match-let ([(list _ nx ny) tile])
+                (draw-world-tile (get-dc) *world* nx ny)))))
+
         (draw-cursor-tile (get-dc) tx ty)
         (set! previous-cursor-tile (list tx ty)))
       (resume-flush))
