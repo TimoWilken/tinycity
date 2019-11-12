@@ -34,6 +34,18 @@
   [(_ _ 'west  ) (values    x      (+ y 1/2))]
   [(_ _ 'center) (values (+ x 1/2) (+ y 1/2))])
 
+(define (tile-neighbours x y)
+  `((west ,(sub1 x) ,y)
+    (east ,(add1 x) ,y)
+    (north ,x ,(sub1 y))
+    (south ,x ,(add1 y))))
+
+(define (tile-has-road? world x y)
+  (match (hash-ref world (list x y) #f)
+    [(list _ 'road _ ...) #t]
+    [(list _ 'power 'road _ ...) #t]
+    [_ #f]))
+
 (define (draw-base-tile dc x y type)
   (send dc set-pen "brown" 1/64 (if *show-tile-grid* 'solid 'transparent))
   (send dc set-brush (hash-ref *terrain-colors* type) 'solid)
@@ -87,20 +99,9 @@
         [(list 'building building-type)
          (void)])))) ;; TODO draw building
 
-(define (tile-neighbours x y)
-  `((west ,(sub1 x) ,y) (east ,(add1 x) ,y) (north ,x ,(sub1 y)) (south ,x ,(add1 y))))
-
-(define (tile-has-road? world x y)
-  (match (hash-ref world (list x y) #f)
-    [(list _ 'road _ ...) #t]
-    [(list _ 'power 'road _ ...) #t]
-    [_ #f]))
-
 (define (place-road! world x y)
+  ;; Create and connect a new road tile.
   (create-road! world x y '(center))
-  (connect-road-tile! world x y))
-
-(define (connect-road-tile! world x y)
   (for ([neighbour (tile-neighbours x y)])
     (match-let ([(list dir nx ny) neighbour])
       ; assume that if a road exists here, we can create more
@@ -108,17 +109,36 @@
         (create-road! world nx ny (list (dir-negate dir)))
         (create-road! world x y (list dir))))))
 
+(define (remove-road! world x y)
+  ;; Remove and disconnect an existing road tile.
+  (hash-update! world (list x y)
+                (match-lambda
+                  [(list base 'road _ ...) (list base)]
+                  [(list base 'power 'road _ ...) (list base 'power)]
+                  [tile tile]))
+  (for ([neighbour (tile-neighbours x y)])
+    (match-let ([(list dir nx ny) neighbour])
+      (remove-road-direction! world nx ny (dir-negate dir)))))
+
+(define (remove-road-direction! world x y direction)
+  (hash-update! world (list x y)
+                (match-lambda
+                  [(list base 'road connected-dirs ...)
+                   (list* base 'road (remove direction connected-dirs))]
+                  [tile tile])))
+
 (define (create-road! world x y connect-dirs)
   (unless (can-build-at? world x y 'road)
     (raise-arguments-error 'create-road! "can't build road here" "x" x "y" y))
-  (hash-update!
-   world (list x y)
-   (match-lambda
-     [(list base 'road connected-dirs ...)
-      (list* base 'road (set-union connected-dirs connect-dirs))]
-     [(list base _ ...)
-      ;; overwrite with or add road -- TODO is this the right thing to do?
-      (list* base 'road connect-dirs)])))
+  (hash-update! world (list x y)
+                (match-lambda
+                  [(list base 'road connected-dirs ...)
+                   (list* base 'road (set-union connected-dirs connect-dirs))]
+                  [(list base 'power _ ...)
+                   (list* base 'power 'road connect-dirs)]
+                  [(list base _ ...)
+                   ;; overwrite with or add road -- TODO is this the right thing to do?
+                   (list* base 'road connect-dirs)])))
 
 (define (can-build-at? world x y type)
   (let can-build-on-tile? ([tile (hash-ref world (list x y) '())])
@@ -169,6 +189,12 @@
   (let ([tile (hash-ref *world* (list x y) #f)])
     (when tile (draw-tile dc x y tile))))
 
+(define (draw-tile-with-neighbours dc world x y)
+  (draw-world-tile dc world x y)
+  (for ([tile (tile-neighbours x y)])
+    (match-let ([(list _ nx ny) tile])
+      (draw-world-tile dc world nx ny))))
+
 (define main-canvas%
   (class canvas%
     (init-field toplevel)
@@ -183,24 +209,27 @@
       (let-values ([(origin-x origin-y) (get-view-start)])
         (send event set-x (+ (send event get-x) origin-x))
         (send event set-y (+ (send event get-y) origin-y)))
-      (send toplevel set-status-text (format "~a" (send event get-event-type)))
+      (define-values (tx ty)
+        (pixels->tiles (send event get-x) (send event get-y)))
       (suspend-flush)
       (match previous-cursor-tile
         [#f (void)]
         [(list x y) (draw-world-tile (get-dc) *world* x y)])
 
-      (let-values ([(tx ty) (pixels->tiles (send event get-x) (send event get-y))])
-        (when (send event button-up? 'left)
-          (when (with-handlers ([exn:fail:contract? (λ (e) #f)])
-                  (place-road! *world* tx ty) #t)
-            (draw-world-tile (get-dc) *world* tx ty)
-            (for ([tile (tile-neighbours tx ty)])
-              (match-let ([(list _ nx ny) tile])
-                (draw-world-tile (get-dc) *world* nx ny)))))
+      (when (send event button-up? 'left)
+        (match (get-selected-tool)
+          ['build-road
+           (when (with-handlers ([exn:fail:contract? (λ (e) #f)])
+                   (place-road! *world* tx ty) #t)
+             (draw-tile-with-neighbours (get-dc) *world* tx ty))]
+          ['bulldoze
+           (remove-road! *world* tx ty)
+           (draw-tile-with-neighbours (get-dc) *world* tx ty)]
+          [_ (void)]))
 
-        (draw-cursor-tile (get-dc) tx ty)
-        (set! previous-cursor-tile (list tx ty)))
-      (resume-flush))
+      (draw-cursor-tile (get-dc) tx ty)
+      (resume-flush)
+      (set! previous-cursor-tile (list tx ty)))
 
     (define/override (on-char event)
       (let-values ([(scroll-x scroll-y) (get-view-start)]
@@ -221,6 +250,12 @@
 (define (on-select-tool radio-box event)
   (send gui:toplevel-frame set-status-text
         (format "~a" (send radio-box get-selection))))
+
+(define (get-selected-tool)
+  (match (send gui:tool-selection get-selection)
+    [0 'query]
+    [1 'bulldoze]
+    [2 'build-road]))
 
 (define gui:toplevel-frame (new frame% [label "TinyCity"] [width 640] [height 480]))
 (define gui:main-pane (new horizontal-pane% [parent gui:toplevel-frame]))
