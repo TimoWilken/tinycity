@@ -317,6 +317,9 @@
 
 (define gui:toplevel-frame : (Instance Frame%)
   (new frame% [label "TinyCity"] [width 640] [height 480]))
+(module+ main
+  (send gui:toplevel-frame show #t))
+
 (define gui:main-pane : (Instance Horizontal-Pane%)
   (new horizontal-pane% [parent gui:toplevel-frame]))
 (define gui:sidebar-panel : (Instance Vertical-Panel%)
@@ -331,4 +334,3 @@
 
 (define gui:main-canvas
   (new main-canvas% [parent gui:main-pane] [toplevel gui:toplevel-frame]))
-(send gui:toplevel-frame show #t)
