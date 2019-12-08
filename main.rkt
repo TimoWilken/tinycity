@@ -55,7 +55,8 @@
   [('north) 'south]
   [('south) 'north]
   [('east) 'west]
-  [('west) 'east])
+  [('west) 'east]
+  [('center) 'center])
 
 (: tile-anchor-coords (-> TC TC Tile-Anchor (values Real Real)))
 (define/match (tile-anchor-coords x y anchor)
@@ -65,8 +66,7 @@
   [(_ _ 'west  ) (values    x      (+ y 1/2))]
   [(_ _ 'center) (values (+ x 1/2) (+ y 1/2))])
 
-(define (tile-neighbours [x : TC] [y : TC])
-  : (Listof (List Tile-Anchor TC TC))
+(define (tile-neighbours [x : TC] [y : TC]) : (Listof (List Tile-Anchor TC TC))
   `((west ,(sub1 x) ,y)
     (east ,(add1 x) ,y)
     (north ,x ,(sub1 y))
@@ -159,13 +159,12 @@
              (if tile (first tile) #f)))
 
          ;; TODO: narrow down type of `type'
-         (define/public (can-build-at? [x : TC] [y : TC] [type : Symbol]) : Boolean
-           (let ([tile (get-tile-at x y)])
-             (match tile
-               [#f #f]
-               [(list base) (not (eq? base 'water))]
-               [(list _ 'road _ ...) (eq? type 'road)]
-               [_ #f])))
+         (define/public (can-build-at? [x : TC] [y : TC] [new-cover : Tile-Cover]) : Boolean
+           (match (get-tile-at x y)
+             [#f #f]
+             [(list base) (not (eq? base 'water))]
+             [(list _ 'road _ ...) (eq? (car new-cover) 'road)]
+             [_ #f]))
 
          (define/public (tile-has-road? [x : TC] [y : TC]) : Boolean
            (match (get-tile-at x y)
@@ -206,7 +205,7 @@
 
          (define/public (create-road! [x : TC] [y : TC]
                                       [connect-dirs : (Listof Tile-Anchor)]) : Void
-           (unless (can-build-at? x y 'road)
+           (unless (can-build-at? x y (cons 'road connect-dirs))
              (raise-arguments-error 'create-road! "can't build road here" "x" x "y" y))
            (hash-update!
             tiles (cons x y)
@@ -298,9 +297,22 @@
         #f)))
 
 (define gui:toplevel-frame : (Instance Frame%)
-  (new frame% [label "TinyCity"] [width 640] [height 480]))
+  (new frame% [parent #f] [label "TinyCity"] [width 640] [height 480]))
 (module+ main
   (send gui:toplevel-frame show #t))
+
+(define gui:menu-bar : (Instance Menu-Bar%)
+  (new menu-bar% [parent gui:toplevel-frame]))
+(define gui:file-menu : (Instance Menu%)
+  (new menu% [parent gui:menu-bar] [label "&File"] [help-string "File"]))
+(void (new menu-item% [parent gui:file-menu]
+           [label "&Open..."] [help-string "Open a file"]
+           [shortcut #\o] [shortcut-prefix '(ctl)]
+           [callback (λ (menu-item event) (displayln event))]))
+(void (new menu-item% [parent gui:file-menu]
+           [label "&Quit"] [help-string "Exit the application"]
+           [shortcut #\q] [shortcut-prefix '(ctl)]
+           [callback (λ (menu-item event) (send gui:toplevel-frame show #f))]))
 
 (define gui:main-pane : (Instance Horizontal-Pane%)
   (new horizontal-pane% [parent gui:toplevel-frame]))
